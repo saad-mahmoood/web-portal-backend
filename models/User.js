@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const speakeasy = require('speakeasy');
 
 const userSchema = new mongoose.Schema({
   firstName: {
@@ -53,6 +54,25 @@ const userSchema = new mongoose.Schema({
   passwordResetExpires: Date,
   lastLogin: Date,
   lastLoginIP: String,
+  twoFactorSecret: {
+    type: String,
+    select: false
+  },
+  twoFactorEnabled: {
+    type: Boolean,
+    default: false
+  },
+  twoFactorBackupCodes: [{
+    code: String,
+    used: {
+      type: Boolean,
+      default: false
+    }
+  }],
+  emailValidated: {
+    type: Boolean,
+    default: false
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -107,6 +127,54 @@ userSchema.methods.generatePasswordResetToken = function() {
   this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
   
   return resetToken;
+};
+
+// Generate 2FA secret
+userSchema.methods.generate2FASecret = function() {
+  const secret = speakeasy.generateSecret({
+    name: `Saher Flow Solutions (${this.email})`,
+    issuer: 'Saher Flow Solutions',
+    length: 32
+  });
+  
+  this.twoFactorSecret = secret.base32;
+  return secret;
+};
+
+// Verify 2FA token
+userSchema.methods.verify2FAToken = function(token) {
+  return speakeasy.totp.verify({
+    secret: this.twoFactorSecret,
+    encoding: 'base32',
+    token: token,
+    window: 2
+  });
+};
+
+// Generate backup codes
+userSchema.methods.generateBackupCodes = function() {
+  const codes = [];
+  for (let i = 0; i < 10; i++) {
+    codes.push({
+      code: crypto.randomBytes(4).toString('hex').toUpperCase(),
+      used: false
+    });
+  }
+  this.twoFactorBackupCodes = codes;
+  return codes.map(c => c.code);
+};
+
+// Verify backup code
+userSchema.methods.verifyBackupCode = function(code) {
+  const backupCode = this.twoFactorBackupCodes.find(
+    bc => bc.code === code.toUpperCase() && !bc.used
+  );
+  
+  if (backupCode) {
+    backupCode.used = true;
+    return true;
+  }
+  return false;
 };
 
 module.exports = mongoose.model('User', userSchema);

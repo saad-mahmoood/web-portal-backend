@@ -104,7 +104,58 @@ const getPasswordResetEmailTemplate = (firstName, resetUrl) => {
   `;
 };
 
+const get2FAEnabledEmailTemplate = (firstName) => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>2FA Enabled - Saher Flow Solutions</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background: linear-gradient(135deg, #1a3a5c 0%, #153149 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+        <h1 style="color: #ffd500; margin: 0; font-size: 28px;">2FA Enabled</h1>
+        <p style="color: #ffffff; margin: 10px 0 0 0; font-size: 16px;">Saher Flow Solutions</p>
+      </div>
+      
+      <div style="background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none;">
+        <h2 style="color: #1a3a5c; margin-top: 0;">Hello ${firstName}!</h2>
+        
+        <p>Two-Factor Authentication (2FA) has been successfully enabled on your account.</p>
+        
+        <div style="background: #d4edda; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #28a745;">
+          <p style="margin: 0; color: #155724;">
+            <strong>Your account is now more secure!</strong><br>
+            You'll need your authenticator app or backup codes to sign in.
+          </p>
+        </div>
+        
+        <p><strong>Important Security Tips:</strong></p>
+        <ul>
+          <li>Keep your backup codes in a safe place</li>
+          <li>Don't share your 2FA codes with anyone</li>
+          <li>If you lose access to your authenticator, use a backup code</li>
+        </ul>
+        
+        <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 30px 0;">
+        
+        <p style="color: #666; font-size: 14px;">
+          If you didn't enable 2FA, please contact support immediately.
+        </p>
+        
+        <p style="color: #666; font-size: 14px;">
+          Best regards,<br>
+          The Saher Flow Solutions Team
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+};
+
 module.exports = {
   getWelcomeEmailTemplate,
-  getPasswordResetEmailTemplate
+  getPasswordResetEmailTemplate,
+  get2FAEnabledEmailTemplate
 };

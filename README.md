@@ -5,6 +5,9 @@ A complete authentication backend built with Express.js, MongoDB, and JWT tokens
 ## Features
 
 - User registration with email verification
+- Live email validation with DNS checking
+- Two-Factor Authentication (2FA) with TOTP
+- Backup codes for 2FA recovery
 - User login/logout
 - Password reset functionality
 - JWT-based authentication
@@ -34,6 +37,8 @@ A complete authentication backend built with Express.js, MongoDB, and JWT tokens
    EMAIL_PASS=your-app-password
    CLIENT_URL=http://localhost:5173
    ```
+
+   **Note**: For email validation to work properly, ensure your server has internet access for DNS lookups.
 
 3. **Database Setup:**
    
@@ -66,6 +71,11 @@ A complete authentication backend built with Express.js, MongoDB, and JWT tokens
 - `GET /verify-email/:token` - Verify email address
 - `POST /forgot-password` - Request password reset
 - `PUT /reset-password/:token` - Reset password
+- `POST /validate-email` - Validate email address (live check)
+- `POST /setup-2fa` - Setup Two-Factor Authentication
+- `POST /verify-2fa` - Verify and enable 2FA
+- `POST /disable-2fa` - Disable 2FA
+- `POST /generate-backup-codes` - Generate new backup codes
 - `GET /me` - Get current user (Protected)
 - `POST /logout` - Logout user (Protected)
 
@@ -136,6 +146,45 @@ Content-Type: application/json
 }
 ```
 
+### Setup 2FA
+```bash
+POST /api/auth/setup-2fa
+Authorization: Bearer <jwt-token>
+```
+
+### Verify 2FA Token
+```bash
+POST /api/auth/verify-2fa
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+
+{
+  "token": "123456"
+}
+```
+
+### Login with 2FA
+```bash
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "password",
+  "twoFactorToken": "123456"
+}
+```
+
+### Validate Email
+```bash
+POST /api/auth/validate-email
+Content-Type: application/json
+
+{
+  "email": "user@example.com"
+}
+```
+
 ### Protected Routes
 Include the JWT token in the Authorization header:
 ```bash
@@ -145,6 +194,10 @@ Authorization: Bearer <your-jwt-token>
 ## Security Features
 
 - Password hashing with bcrypt
+- Two-Factor Authentication (TOTP)
+- Live email validation with DNS checking
+- Disposable email blocking
+- Backup codes for 2FA recovery
 - JWT token authentication
 - Input validation and sanitization
 - Rate limiting ready
@@ -180,6 +233,10 @@ Authorization: Bearer <your-jwt-token>
 - isActive (Boolean)
 - createdAt (Date)
 - updatedAt (Date)
+- twoFactorSecret (String, encrypted)
+- twoFactorEnabled (Boolean)
+- twoFactorBackupCodes (Array)
+- emailValidated (Boolean)
 
 ## Email Configuration
 
@@ -189,6 +246,26 @@ For Gmail:
 1. Enable 2-factor authentication
 2. Generate an app password
 3. Use the app password in `EMAIL_PASS`
+
+## Two-Factor Authentication
+
+The API supports TOTP-based 2FA using authenticator apps like:
+- Google Authenticator
+- Authy
+- Microsoft Authenticator
+- Any TOTP-compatible app
+
+### 2FA Setup Process:
+1. User calls `/api/auth/setup-2fa` to get QR code
+2. User scans QR code with authenticator app
+3. User calls `/api/auth/verify-2fa` with token to enable 2FA
+4. System generates backup codes for recovery
+
+### 2FA Login Process:
+1. User provides email/password
+2. If 2FA enabled, system requests 2FA token
+3. User provides TOTP token or backup code
+4. System validates and completes login
 
 ## Error Handling
 

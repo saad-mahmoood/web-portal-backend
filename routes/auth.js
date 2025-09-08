@@ -7,16 +7,41 @@ const { getWelcomeEmailTemplate, getPasswordResetEmailTemplate } = require('../u
 const { protect } = require('../middleware/auth');
 const { requireEmailVerification } = require('../middleware/emailVerification');
 const { validateCompanyDomain } = require('../middleware/domainValidation');
+const { validateEmailMiddleware } = require('../middleware/emailValidation');
 const seedAdmin = require('../utils/seedAdmin');
 const Company = require('../models/Company');
 const User = require('../models/User');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
 
 const router = express.Router();
+
+// @desc    Validate email endpoint
+// @route   POST /api/auth/validate-email
+// @access  Public
+router.post('/validate-email', validateEmailMiddleware, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: 'Email is valid and can receive messages',
+      data: {
+        valid: true,
+        reason: req.emailValidation.reason
+      }
+    });
+  } catch (error) {
+    console.error('Email validation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during email validation'
+    });
+  }
+});
 
 // @desc    Register user
 // @route   POST /api/auth/register
 // @access  Public
-router.post('/register', validateCompanyDomain, [
+router.post('/register', validateEmailMiddleware, validateCompanyDomain, [
   body('firstName')
     .trim()
     .isLength({ min: 2, max: 50 })
@@ -68,7 +93,8 @@ router.post('/register', validateCompanyDomain, [
       email,
       company,
       password,
-      isEmailVerified: false
+      isEmailVerified: false,
+      emailValidated: true // Mark as validated since we checked it
     });
 
     // Generate email verification token
@@ -130,7 +156,11 @@ router.post('/login', [
     .withMessage('Please enter a valid email'),
   body('password')
     .notEmpty()
-    .withMessage('Password is required')
+    .withMessage('Password is required'),
+  body('twoFactorToken')
+    .optional()
+    .isLength({ min: 6, max: 6 })
+    .withMessage('2FA token must be 6 digits')
 ], async (req, res) => {
   try {
     // Check for validation errors
@@ -143,10 +173,10 @@ router.post('/login', [
       });
     }
 
-    const { email, password, rememberMe } = req.body;
+    const { email, password, twoFactorToken, backupCode } = req.body;
 
     // Check if user exists and get password
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email }).select('+password +twoFactorSecret');
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -169,6 +199,40 @@ router.post('/login', [
         success: false,
         message: 'Invalid email or password'
       });
+    }
+
+    // If 2FA is enabled, verify the token
+    if (user.twoFactorEnabled) {
+      if (!twoFactorToken && !backupCode) {
+        return res.status(200).json({
+          success: false,
+          message: '2FA token required',
+          requiresTwoFactor: true,
+          data: {
+            tempUserId: user._id // Don't expose this in production, use a temporary token instead
+          }
+        });
+      }
+
+      let twoFactorValid = false;
+
+      if (backupCode) {
+        // Verify backup code
+        twoFactorValid = user.verifyBackupCode(backupCode);
+        if (twoFactorValid) {
+          await user.save(); // Save the used backup code
+        }
+      } else if (twoFactorToken) {
+        // Verify TOTP token
+        twoFactorValid = user.verify2FAToken(twoFactorToken);
+      }
+
+      if (!twoFactorValid) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid 2FA token or backup code'
+        });
+      }
     }
 
     // Get user's IP address
@@ -214,7 +278,8 @@ router.post('/login', [
           role: user.role,
           isEmailVerified: user.isEmailVerified,
           lastLogin: user.lastLogin,
-          lastLoginIP: user.lastLoginIP
+          lastLoginIP: user.lastLoginIP,
+          twoFactorEnabled: user.twoFactorEnabled
         }
       }
     });
@@ -223,6 +288,282 @@ router.post('/login', [
     res.status(500).json({
       success: false,
       message: 'Server error during login'
+    });
+  }
+});
+
+// @desc    Setup 2FA
+// @route   POST /api/auth/setup-2fa
+// @access  Private
+router.post('/setup-2fa', protect, requireEmailVerification, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('+twoFactorSecret');
+    
+    if (user.twoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is already enabled'
+      });
+    }
+
+    // Generate 2FA secret
+    const secret = user.generate2FASecret();
+    await user.save();
+
+    // Generate QR code
+    const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
+
+    res.json({
+      success: true,
+      message: '2FA setup initiated',
+      data: {
+        secret: secret.base32,
+        qrCode: qrCodeUrl,
+        manualEntryKey: secret.base32
+      }
+    });
+  } catch (error) {
+    console.error('2FA setup error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during 2FA setup'
+    });
+  }
+});
+
+// @desc    Verify and enable 2FA
+// @route   POST /api/auth/verify-2fa
+// @access  Private
+router.post('/verify-2fa', protect, requireEmailVerification, [
+  body('token')
+    .isLength({ min: 6, max: 6 })
+    .withMessage('Token must be 6 digits')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { token } = req.body;
+    const user = await User.findById(req.user._id).select('+twoFactorSecret');
+
+    if (user.twoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is already enabled'
+      });
+    }
+
+    if (!user.twoFactorSecret) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please setup 2FA first'
+      });
+    }
+
+    // Verify the token
+    const isValid = user.verify2FAToken(token);
+    
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid 2FA token'
+      });
+    }
+
+    // Enable 2FA and generate backup codes
+    user.twoFactorEnabled = true;
+    const backupCodes = user.generateBackupCodes();
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '2FA enabled successfully',
+      data: {
+        backupCodes
+      }
+    });
+  } catch (error) {
+    console.error('2FA verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during 2FA verification'
+    });
+  }
+});
+
+// @desc    Disable 2FA
+// @route   POST /api/auth/disable-2fa
+// @access  Private
+router.post('/disable-2fa', protect, requireEmailVerification, [
+  body('password')
+    .notEmpty()
+    .withMessage('Password is required'),
+  body('token')
+    .optional()
+    .isLength({ min: 6, max: 6 })
+    .withMessage('Token must be 6 digits'),
+  body('backupCode')
+    .optional()
+    .isLength({ min: 8, max: 8 })
+    .withMessage('Backup code must be 8 characters')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { password, token, backupCode } = req.body;
+    const user = await User.findById(req.user._id).select('+password +twoFactorSecret');
+
+    if (!user.twoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is not enabled'
+      });
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid password'
+      });
+    }
+
+    // Verify 2FA token or backup code
+    let twoFactorValid = false;
+    
+    if (backupCode) {
+      twoFactorValid = user.verifyBackupCode(backupCode);
+    } else if (token) {
+      twoFactorValid = user.verify2FAToken(token);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: '2FA token or backup code is required'
+      });
+    }
+
+    if (!twoFactorValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid 2FA token or backup code'
+      });
+    }
+
+    // Disable 2FA
+    user.twoFactorEnabled = false;
+    user.twoFactorSecret = undefined;
+    user.twoFactorBackupCodes = [];
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '2FA disabled successfully'
+    });
+  } catch (error) {
+    console.error('2FA disable error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during 2FA disable'
+    });
+  }
+});
+
+// @desc    Generate new backup codes
+// @route   POST /api/auth/generate-backup-codes
+// @access  Private
+router.post('/generate-backup-codes', protect, requireEmailVerification, [
+  body('password')
+    .notEmpty()
+    .withMessage('Password is required'),
+  body('token')
+    .optional()
+    .isLength({ min: 6, max: 6 })
+    .withMessage('Token must be 6 digits'),
+  body('backupCode')
+    .optional()
+    .isLength({ min: 8, max: 8 })
+    .withMessage('Backup code must be 8 characters')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { password, token, backupCode } = req.body;
+    const user = await User.findById(req.user._id).select('+password +twoFactorSecret');
+
+    if (!user.twoFactorEnabled) {
+      return res.status(400).json({
+        success: false,
+        message: '2FA is not enabled'
+      });
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid password'
+      });
+    }
+
+    // Verify 2FA token or backup code
+    let twoFactorValid = false;
+    
+    if (backupCode) {
+      twoFactorValid = user.verifyBackupCode(backupCode);
+    } else if (token) {
+      twoFactorValid = user.verify2FAToken(token);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: '2FA token or backup code is required'
+      });
+    }
+
+    if (!twoFactorValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid 2FA token or backup code'
+      });
+    }
+
+    // Generate new backup codes
+    const newBackupCodes = user.generateBackupCodes();
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'New backup codes generated successfully',
+      data: {
+        backupCodes: newBackupCodes
+      }
+    });
+  } catch (error) {
+    console.error('Generate backup codes error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error generating backup codes'
     });
   }
 });
