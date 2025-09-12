@@ -1,27 +1,37 @@
 const User = require('../models/User');
-const bcrypt = require('bcryptjs');
+const Company = require('../models/Company');
 
 const createAdminUser = async () => {
   try {
     // Check if admin already exists
-    const existingAdmin = await User.findOne({ email: 'admin@saherflow.com' });
+    const existingAdmin = await User.findByEmail('admin@saherflow.com');
     
     if (existingAdmin) {
       console.log('Admin user already exists');
       return;
     }
 
+    // Find or create Saher Flow Solutions company
+    let company = await Company.findByDomain('saherflow.com');
+    if (!company) {
+      company = await Company.create({
+        name: 'Saher Flow Solutions',
+        domain_name: 'saherflow.com'
+      });
+    }
+
     // Create admin user
     const adminUser = await User.create({
-      firstName: 'Admin',
-      lastName: 'User',
+      company_id: company.id,
+      name: 'Admin User',
       email: 'admin@saherflow.com',
-      company: 'Saher Flow Solutions',
       password: 'Admin123',
-      role: 'admin',
-      isEmailVerified: true,
-      isActive: true
+      role: 'admin'
     });
+
+    // Mark as verified
+    const query = 'UPDATE "user" SET is_email_verified = true, email_validated = true WHERE id = $1';
+    await require('../config/database').query(query, [adminUser.id]);
 
     console.log('✅ Admin user created successfully');
     console.log('📧 Email: admin@saherflow.com');

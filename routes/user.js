@@ -58,7 +58,7 @@ router.put('/:id', protect, admin, [
     const { firstName, lastName, email, company, role, isEmailVerified, isActive } = req.body;
 
     // Find user
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(parseInt(req.params.id));
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -68,12 +68,9 @@ router.put('/:id', protect, admin, [
 
     // Check if email is being changed and if it already exists
     if (email && email !== user.email) {
-      const existingUser = await User.findOne({ 
-        email,
-        _id: { $ne: req.params.id }
-      });
+      const existingUser = await User.findByEmail(email);
       
-      if (existingUser) {
+      if (existingUser && existingUser.id !== parseInt(req.params.id)) {
         return res.status(400).json({
           success: false,
           message: 'Email already exists'
@@ -82,28 +79,22 @@ router.put('/:id', protect, admin, [
     }
 
     // Update user
-    const updatedUser = await User.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...(firstName && { firstName }),
-        ...(lastName && { lastName }),
-        ...(email && { email }),
-        ...(company && { company }),
-        ...(role && { role }),
-        ...(isEmailVerified !== undefined && { isEmailVerified }),
-        ...(isActive !== undefined && { isActive })
-      },
-      {
-        new: true,
-        runValidators: true
-      }
-    );
+    const updateData = {};
+    if (firstName || lastName) {
+      updateData.name = `${firstName || user.name.split(' ')[0]} ${lastName || user.name.split(' ').slice(1).join(' ')}`.trim();
+    }
+    if (email) updateData.email = email;
+    if (role) updateData.role = role;
+    if (isEmailVerified !== undefined) updateData.is_email_verified = isEmailVerified;
+    if (isActive !== undefined) updateData.is_active = isActive;
+    
+    const updatedUser = await User.update(parseInt(req.params.id), updateData);
 
     res.json({
       success: true,
       message: 'User updated successfully',
       data: {
-        user: updatedUser
+        user: updatedUser.toJSON()
       }
     });
   } catch (error) {
@@ -120,7 +111,7 @@ router.put('/:id', protect, admin, [
 // @access  Private/Admin
 router.delete('/:id', protect, admin, async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(parseInt(req.params.id));
     
     if (!user) {
       return res.status(404).json({
@@ -130,7 +121,7 @@ router.delete('/:id', protect, admin, async (req, res) => {
     }
 
     // Prevent admin from deleting themselves
-    if (user._id.toString() === req.user._id.toString()) {
+    if (user.id === req.user.id) {
       return res.status(400).json({
         success: false,
         message: 'You cannot delete your own account'
@@ -138,7 +129,7 @@ router.delete('/:id', protect, admin, async (req, res) => {
     }
 
     // Hard delete user
-    await User.findByIdAndDelete(req.params.id);
+    await User.delete(parseInt(req.params.id));
 
     res.json({
       success: true,
@@ -187,24 +178,21 @@ router.put('/profile', protect, requireEmailVerification, [
     const { firstName, lastName, company } = req.body;
 
     // Update user
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      {
-        ...(firstName && { firstName }),
-        ...(lastName && { lastName }),
-        ...(company && { company })
-      },
-      {
-        new: true,
-        runValidators: true
-      }
-    );
+    const updateData = {};
+    if (firstName || lastName) {
+      const currentName = req.user.name || '';
+      const currentFirstName = currentName.split(' ')[0] || '';
+      const currentLastName = currentName.split(' ').slice(1).join(' ') || '';
+      updateData.name = `${firstName || currentFirstName} ${lastName || currentLastName}`.trim();
+    }
+    
+    const user = await User.update(req.user.id, updateData);
 
     res.json({
       success: true,
       message: 'Profile updated successfully',
       data: {
-        user
+        user: user.toJSON()
       }
     });
   } catch (error) {
@@ -243,7 +231,7 @@ router.put('/change-password', protect, requireEmailVerification, [
     const { currentPassword, newPassword } = req.body;
 
     // Get user with password
-    const user = await User.findById(req.user._id).select('+password');
+    const user = await User.findById(req.user.id, true);
 
     // Check current password
     const isCurrentPasswordValid = await user.comparePassword(currentPassword);
@@ -255,8 +243,7 @@ router.put('/change-password', protect, requireEmailVerification, [
     }
 
     // Update password
-    user.password = newPassword;
-    await user.save();
+    await user.updatePassword(newPassword);
 
     res.json({
       success: true,
@@ -277,7 +264,7 @@ router.put('/change-password', protect, requireEmailVerification, [
 router.delete('/account', protect, requireEmailVerification, async (req, res) => {
   try {
     // Soft delete - deactivate account
-    await User.findByIdAndUpdate(req.user._id, { isActive: false });
+    await User.update(req.user.id, { is_active: false });
 
     res.json({
       success: true,
@@ -299,25 +286,19 @@ router.get('/all', protect, admin, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
 
-    const users = await User.find({ isActive: true })
-      .select('-password')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    const total = await User.countDocuments({ isActive: true });
+    
+    const result = await User.findAll(page, limit, true);
 
     res.json({
       success: true,
       data: {
-        users,
+        users: result.users,
         pagination: {
           page,
           limit,
-          total,
-          pages: Math.ceil(total / limit)
+          total: result.total,
+          pages: Math.ceil(result.total / limit)
         }
       }
     });
@@ -335,13 +316,12 @@ router.get('/all', protect, admin, async (req, res) => {
 // @access  Private/Admin
 router.get('/companies', protect, admin, async (req, res) => {
   try {
-    const companies = await Company.find()
-      .sort({ name: 1 });
+    const companies = await Company.findAll();
 
     res.json({
       success: true,
       data: {
-        companies
+        companies: companies.map(company => company.toJSON())
       }
     });
   } catch (error) {

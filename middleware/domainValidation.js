@@ -25,22 +25,20 @@ const validateCompanyDomain = async (req, res, next) => {
     const company = await Company.findByDomain(emailDomain);
 
     if (!company) {
-      // Get all active companies for error message
-      const activeCompanies = await Company.find({ isActive: true })
-        .select('name domains')
-        .sort({ name: 1 });
+      // Get all companies for error message
+      const allCompanies = await Company.findAll();
       
-      const allowedDomains = activeCompanies.reduce((acc, comp) => {
-        return acc.concat(comp.domains);
-      }, []);
+      const allowedDomains = allCompanies
+        .filter(comp => comp.domain_name)
+        .map(comp => comp.domain_name);
 
       return res.status(403).json({
         success: false,
         message: `Registration is restricted to employees of approved companies only.`,
         allowedDomains: allowedDomains,
-        approvedCompanies: activeCompanies.map(comp => ({
+        approvedCompanies: allCompanies.map(comp => ({
           name: comp.name,
-          domains: comp.domains
+          domains: comp.domain_name ? [comp.domain_name] : []
         }))
       });
     }

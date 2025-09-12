@@ -1,9 +1,8 @@
-// server.js
 'use strict';
 
 const express = require('express');
-const mongoose = require('mongoose');
 const dotenv = require('dotenv');
+const database = require('./config/database');
 const seedCompanies = require('./utils/seedCompanies');
 const seedAdmin = require('./utils/seedAdmin');
 
@@ -100,28 +99,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// --- MongoDB connection & server start ---
-const connectDB = async () => {
-  try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI environment variable is not defined');
-    }
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('Connected to MongoDB');
-  } catch (error) {
-    console.error('MongoDB connection error:', error.message || error);
-    console.log('\n📋 To fix this error:');
-    console.log('1. Create a MongoDB Atlas cluster or start a local MongoDB.');
-    console.log('2. Get a connection string and set MONGODB_URI in your .env file.');
-    console.log('3. Restart the server.');
-    process.exit(1);
-  }
-};
-
+// --- Database connection & server start ---
 let server;
 
 const startServer = async () => {
-  await connectDB();
+  await database.connect();
 
   // Run seeders (do not block start if they fail)
   seedCompanies().catch((err) => console.error('seedCompanies error:', err));
@@ -158,8 +140,7 @@ const gracefulShutdown = async (signal) => {
         console.log('HTTP server closed.');
       });
     }
-    await mongoose.disconnect();
-    console.log('MongoDB disconnected.');
+    await database.disconnect();
     process.exit(0);
   } catch (err) {
     console.error('Error during shutdown:', err);

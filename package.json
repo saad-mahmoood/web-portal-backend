@@ -21,7 +21,7 @@
     "express": "^4.21.2",
     "express-validator": "^7.2.1",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.0.3",
+    "pg": "^8.11.3",
     "nodemailer": "^6.9.7",
     "nodemailer-smtp-transport": "^2.4.2",
     "qrcode": "^1.5.4",

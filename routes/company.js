@@ -10,28 +10,12 @@ const router = express.Router();
 // @access  Public (for registration domain checking)
 router.get('/', async (req, res) => {
   try {
-    // Check if request is from admin (has authorization header)
-    const isAdminRequest = req.headers.authorization;
-    
-    let query = {};
-    let select = 'name domains description';
-    
-    if (isAdminRequest) {
-      // Admin can see all companies including inactive ones
-      select = 'name domains description contactEmail isActive createdAt updatedAt';
-    } else {
-      // Public can only see active companies
-      query = { isActive: true };
-    }
-    
-    const companies = await Company.find(query)
-      .select(select)
-      .sort({ name: 1 });
+    const companies = await Company.findAll();
 
     res.json({
       success: true,
       data: {
-        companies
+        companies: companies.map(company => company.toJSON())
       }
     });
   } catch (error) {
@@ -48,7 +32,7 @@ router.get('/', async (req, res) => {
 // @access  Private/Admin
 router.get('/:id', protect, admin, async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id);
+    const company = await Company.findById(parseInt(req.params.id));
 
     if (!company) {
       return res.status(404).json({
@@ -60,7 +44,7 @@ router.get('/:id', protect, admin, async (req, res) => {
     res.json({
       success: true,
       data: {
-        company
+        company: company.toJSON()
       }
     });
   } catch (error) {
@@ -80,24 +64,13 @@ router.post('/', protect, admin, [
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage('Company name must be between 2 and 100 characters'),
+  body('domain_name')
+    .notEmpty()
+    .withMessage('Domain is required'),
   body('domains')
-    .isArray({ min: 1 })
-    .withMessage('At least one domain is required')
-    .custom((domains) => {
-      const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}$/;
-      return domains.every(domain => domainRegex.test(domain));
-    })
-    .withMessage('All domains must be valid'),
-  body('description')
     .optional()
-    .trim()
-    .isLength({ max: 500 })
-    .withMessage('Description cannot exceed 500 characters'),
-  body('contactEmail')
-    .optional()
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Contact email must be valid')
+    .isArray()
+    .withMessage('Domains must be an array')
 ], async (req, res) => {
   try {
     // Check for validation errors
@@ -110,53 +83,47 @@ router.post('/', protect, admin, [
       });
     }
 
-    const { name, domains, description, contactEmail } = req.body;
+    const { name, domain_name, domains } = req.body;
+    
+    // Use domain_name or first domain from domains array for compatibility
+    const finalDomain = domain_name || (domains && domains[0]);
+    
+    if (!finalDomain) {
+      return res.status(400).json({
+        success: false,
+        message: 'Domain is required'
+      });
+    }
 
     // Check if company name already exists
-    const existingCompany = await Company.findOne({ 
-      name: { $regex: new RegExp(`^${name}$`, 'i') }
-    });
-    
-    if (existingCompany) {
+    const nameExists = await Company.checkNameExists(name);
+    if (nameExists) {
       return res.status(400).json({
         success: false,
         message: 'Company with this name already exists'
       });
     }
 
-    // Check if any domain is already used by another company
-    const existingDomains = await Company.find({
-      domains: { $in: domains.map(d => d.toLowerCase()) },
-      isActive: true
-    });
-
-    if (existingDomains.length > 0) {
-      const conflictingDomains = existingDomains.reduce((acc, comp) => {
-        const conflicts = comp.domains.filter(domain => 
-          domains.map(d => d.toLowerCase()).includes(domain)
-        );
-        return acc.concat(conflicts);
-      }, []);
-
+    // Check if domain is already used
+    const domainExists = await Company.checkDomainExists(finalDomain);
+    if (domainExists) {
       return res.status(400).json({
         success: false,
-        message: `The following domains are already registered: ${conflictingDomains.join(', ')}`
+        message: `Domain ${finalDomain} is already registered`
       });
     }
 
     // Create company
     const company = await Company.create({
       name,
-      domains: domains.map(d => d.toLowerCase()),
-      description,
-      contactEmail
+      domain_name: finalDomain
     });
 
     res.status(201).json({
       success: true,
       message: 'Company created successfully',
       data: {
-        company
+        company: company.toJSON()
       }
     });
   } catch (error) {
@@ -177,29 +144,14 @@ router.put('/:id', protect, admin, [
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage('Company name must be between 2 and 100 characters'),
+  body('domain_name')
+    .optional()
+    .notEmpty()
+    .withMessage('Domain cannot be empty'),
   body('domains')
     .optional()
-    .isArray({ min: 1 })
-    .withMessage('At least one domain is required')
-    .custom((domains) => {
-      const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}$/;
-      return domains.every(domain => domainRegex.test(domain));
-    })
-    .withMessage('All domains must be valid'),
-  body('description')
-    .optional()
-    .trim()
-    .isLength({ max: 500 })
-    .withMessage('Description cannot exceed 500 characters'),
-  body('contactEmail')
-    .optional()
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Contact email must be valid'),
-  body('isActive')
-    .optional()
-    .isBoolean()
-    .withMessage('isActive must be a boolean')
+    .isArray()
+    .withMessage('Domains must be an array')
 ], async (req, res) => {
   try {
     // Check for validation errors
@@ -212,10 +164,11 @@ router.put('/:id', protect, admin, [
       });
     }
 
-    const { name, domains, description, contactEmail, isActive } = req.body;
+    const { name, domain_name, domains } = req.body;
+    const id = parseInt(req.params.id);
 
     // Find company
-    const company = await Company.findById(req.params.id);
+    const company = await Company.findById(id);
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -225,12 +178,8 @@ router.put('/:id', protect, admin, [
 
     // Check if new name conflicts with existing companies
     if (name && name !== company.name) {
-      const existingCompany = await Company.findOne({ 
-        name: { $regex: new RegExp(`^${name}$`, 'i') },
-        _id: { $ne: req.params.id }
-      });
-      
-      if (existingCompany) {
+      const nameExists = await Company.checkNameExists(name, id);
+      if (nameExists) {
         return res.status(400).json({
           success: false,
           message: 'Company with this name already exists'
@@ -238,51 +187,30 @@ router.put('/:id', protect, admin, [
       }
     }
 
-    // Check if new domains conflict with existing companies
-    if (domains) {
-      const normalizedDomains = domains.map(d => d.toLowerCase());
-      const existingDomains = await Company.find({
-        domains: { $in: normalizedDomains },
-        isActive: true,
-        _id: { $ne: req.params.id }
-      });
-
-      if (existingDomains.length > 0) {
-        const conflictingDomains = existingDomains.reduce((acc, comp) => {
-          const conflicts = comp.domains.filter(domain => 
-            normalizedDomains.includes(domain)
-          );
-          return acc.concat(conflicts);
-        }, []);
-
+    // Check if new domain conflicts with existing companies
+    const finalDomain = domain_name || (domains && domains[0]);
+    if (finalDomain && finalDomain !== company.domain_name) {
+      const domainExists = await Company.checkDomainExists(finalDomain, id);
+      if (domainExists) {
         return res.status(400).json({
           success: false,
-          message: `The following domains are already registered: ${conflictingDomains.join(', ')}`
+          message: `Domain ${finalDomain} is already registered`
         });
       }
     }
 
     // Update company
-    const updatedCompany = await Company.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...(name && { name }),
-        ...(domains && { domains: domains.map(d => d.toLowerCase()) }),
-        ...(description !== undefined && { description }),
-        ...(contactEmail !== undefined && { contactEmail }),
-        ...(isActive !== undefined && { isActive })
-      },
-      {
-        new: true,
-        runValidators: true
-      }
-    );
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (finalDomain) updateData.domain_name = finalDomain;
+    
+    const updatedCompany = await Company.update(id, updateData);
 
     res.json({
       success: true,
       message: 'Company updated successfully',
       data: {
-        company: updatedCompany
+        company: updatedCompany.toJSON()
       }
     });
   } catch (error) {
@@ -299,7 +227,8 @@ router.put('/:id', protect, admin, [
 // @access  Private/Admin
 router.delete('/:id', protect, admin, async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id);
+    const id = parseInt(req.params.id);
+    const company = await Company.findById(id);
     
     if (!company) {
       return res.status(404).json({
@@ -308,9 +237,8 @@ router.delete('/:id', protect, admin, async (req, res) => {
       });
     }
 
-    // Soft delete - deactivate company
-    company.isActive = false;
-    await company.save();
+    // Hard delete company (this will cascade delete users)
+    await Company.delete(id);
 
     res.json({
       success: true,
@@ -339,9 +267,9 @@ router.get('/check-domain/:domain', async (req, res) => {
       data: {
         isAllowed: !!company,
         company: company ? {
-          id: company._id,
+          id: company.id,
           name: company.name,
-          description: company.description
+          domain_name: company.domain_name
         } : null
       }
     });

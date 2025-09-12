@@ -41,9 +41,9 @@ export default function Dashboard() {
 
         setStats({
           totalUsers: users.length,
-          verifiedUsers: users.filter((u: any) => u.isEmailVerified).length,
+          verifiedUsers: users.filter((u: any) => u.is_email_verified).length,
           totalCompanies: companies.length,
-          activeCompanies: companies.filter((c: any) => c.isActive).length,
+          activeCompanies: companies.length, // All companies are active in new schema
           recentUsers: users.slice(0, 6),
           recentCompanies: companies.slice(0, 6)
         })
@@ -152,13 +152,13 @@ export default function Dashboard() {
                   </div>
                   <div className="ml-3">
                     <p className="text-sm font-medium text-gray-900">
-                      {user.firstName ?? ''} {user.lastName ?? ''}
+                      {user.name ?? ''}
                     </p>
                     <p className="text-xs text-gray-500">{user.email ?? ''}</p>
                   </div>
                 </div>
                 <div className="flex items-center">
-                  {user.isEmailVerified ? (
+                  {user.is_email_verified ? (
                     <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                       Verified
                     </span>
@@ -186,20 +186,14 @@ export default function Dashboard() {
                   <div className="ml-3">
                     <p className="text-sm font-medium text-gray-900">{company.name ?? ''}</p>
                     <p className="text-xs text-gray-500">
-                      {(company.domains?.length ?? 0)} domain{(company.domains?.length ?? 0) !== 1 ? 's' : ''}
+                      {company.domain_name ? '1 domain' : '0 domains'}
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center">
-                  {company.isActive ? (
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                      Active
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                      Inactive
-                    </span>
-                  )}
+                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    Active
+                  </span>
                 </div>
               </div>
             ))}

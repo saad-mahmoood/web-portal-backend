@@ -8,9 +8,8 @@ const { protect } = require('../middleware/auth');
 const { requireEmailVerification } = require('../middleware/emailVerification');
 const { validateCompanyDomain } = require('../middleware/domainValidation');
 const { validateEmailMiddleware } = require('../middleware/emailValidation');
-const seedAdmin = require('../utils/seedAdmin');
-const Company = require('../models/Company');
 const User = require('../models/User');
+const Company = require('../models/Company');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 
@@ -78,7 +77,7 @@ router.post('/register', validateEmailMiddleware, validateCompanyDomain, [
     const { firstName, lastName, email, company, password } = req.body;
 
     // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findByEmail(email);
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -86,20 +85,24 @@ router.post('/register', validateEmailMiddleware, validateCompanyDomain, [
       });
     }
 
+    // Parse name from firstName and lastName
+    const fullName = `${firstName} ${lastName}`.trim();
+
     // Create user
     const user = await User.create({
-      firstName,
-      lastName,
+      company_id: req.approvedCompany.id,
+      name: fullName,
       email,
-      company,
-      password,
-      isEmailVerified: false,
-      emailValidated: true // Mark as validated since we checked it
+      password
     });
+
+    // Mark as email validated since we checked it
+    const database = require('../config/database');
+    await database.query('UPDATE "user" SET email_validated = true WHERE id = $1', [user.id]);
 
     // Generate email verification token
     const verificationToken = user.generateEmailVerificationToken();
-    await user.save({ validateBeforeSave: false });
+    await user.save();
 
     // Create verification URL
     const verificationUrl = `http://localhost:5000/api/auth/verify-email/${verificationToken}`;
@@ -109,7 +112,7 @@ router.post('/register', validateEmailMiddleware, validateCompanyDomain, [
       await sendEmail({
         email: user.email,
         subject: 'Email Verification - Saher Flow Solutions',
-        html: getWelcomeEmailTemplate(user.firstName, verificationUrl)
+        html: getWelcomeEmailTemplate(firstName, verificationUrl)
       });
 
       res.status(201).json({
@@ -118,11 +121,11 @@ router.post('/register', validateEmailMiddleware, validateCompanyDomain, [
         data: {
           user: {
             id: user._id,
-            firstName: user.firstName,
-            lastName: user.lastName,
+            firstName: firstName,
+            lastName: lastName,
             email: user.email,
-            company: user.company,
-            isEmailVerified: user.isEmailVerified
+            company: req.approvedCompany.name,
+            isEmailVerified: user.is_email_verified
           }
         }
       });
@@ -130,7 +133,7 @@ router.post('/register', validateEmailMiddleware, validateCompanyDomain, [
       console.error('Verification email failed:', emailError);
       
       // Delete user if email fails to send
-      await User.findByIdAndDelete(user._id);
+      await User.delete(user.id);
       
       res.status(500).json({
         success: false,
@@ -177,7 +180,7 @@ router.post('/login', [
     const { email, password, twoFactorToken, backupCode } = req.body;
 
     // Check if user exists and get password
-    const user = await User.findOne({ email }).select('+password +twoFactorSecret');
+    const user = await User.findByEmail(email, true);
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -186,7 +189,7 @@ router.post('/login', [
     }
 
     // Check if account is active
-    if (!user.isActive) {
+    if (!user.is_active) {
       return res.status(401).json({
         success: false,
         message: 'Account has been deactivated. Please contact support.'
@@ -203,14 +206,14 @@ router.post('/login', [
     }
 
     // If 2FA is enabled, verify the token
-    if (user.twoFactorEnabled) {
+    if (user.two_factor_enabled) {
       if (!twoFactorToken && !backupCode) {
         return res.status(200).json({
           success: false,
           message: '2FA token required',
           requiresTwoFactor: true,
           data: {
-            tempUserId: user._id // Don't expose this in production, use a temporary token instead
+            tempUserId: user.id // Don't expose this in production, use a temporary token instead
           }
         });
       }
@@ -221,7 +224,7 @@ router.post('/login', [
         // Verify backup code
         twoFactorValid = user.verifyBackupCode(backupCode);
         if (twoFactorValid) {
-          await user.save(); // Save the used backup code
+          await user.save();
         }
       } else if (twoFactorToken) {
         // Verify TOTP token
@@ -259,12 +262,12 @@ router.post('/login', [
     }
 
     // Update last login and IP
-    user.lastLogin = new Date();
-    user.lastLoginIP = userIP;
-    await user.save({ validateBeforeSave: false });
+    user.last_login_time = new Date();
+    user.last_login_ip = userIP;
+    await user.save();
 
     // Generate token
-    const token = generateToken(user._id);
+    const token = generateToken(user.id);
 
     res.json({
       success: true,
@@ -272,16 +275,16 @@ router.post('/login', [
       data: {
         token,
         user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
+          id: user.id,
+          firstName: user.name.split(' ')[0] || user.name,
+          lastName: user.name.split(' ').slice(1).join(' ') || '',
           email: user.email,
-          company: user.company,
+          company: user.company_name || '',
           role: user.role,
-          isEmailVerified: user.isEmailVerified,
-          lastLogin: user.lastLogin,
-          lastLoginIP: user.lastLoginIP,
-          twoFactorEnabled: user.twoFactorEnabled
+          isEmailVerified: user.is_email_verified,
+          lastLogin: user.last_login_time,
+          lastLoginIP: user.last_login_ip,
+          twoFactorEnabled: user.two_factor_enabled
         }
       }
     });
@@ -299,9 +302,9 @@ router.post('/login', [
 // @access  Private
 router.post('/setup-2fa', protect, requireEmailVerification, async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('+twoFactorSecret');
+    const user = await User.findById(req.user.id, true);
     
-    if (user.twoFactorEnabled) {
+    if (user.two_factor_enabled) {
       return res.status(400).json({
         success: false,
         message: '2FA is already enabled'
@@ -367,16 +370,16 @@ router.post('/verify-2fa', protect, requireEmailVerification, [
       });
     }
     
-    const user = await User.findById(req.user._id).select('+twoFactorSecret');
+    const user = await User.findById(req.user.id, true);
 
-    if (user.twoFactorEnabled) {
+    if (user.two_factor_enabled) {
       return res.status(400).json({
         success: false,
         message: '2FA is already enabled'
       });
     }
 
-    if (!user.twoFactorSecret) {
+    if (!user.two_factor_secret) {
       return res.status(400).json({
         success: false,
         message: 'Please setup 2FA first'
@@ -394,7 +397,7 @@ router.post('/verify-2fa', protect, requireEmailVerification, [
     }
 
     // Enable 2FA and generate backup codes
-    user.twoFactorEnabled = true;
+    user.two_factor_enabled = true;
     const backupCodes = user.generateBackupCodes();
     await user.save();
 
@@ -442,9 +445,9 @@ router.post('/disable-2fa', protect, requireEmailVerification, [
     }
 
     const { password, token, backupCode } = req.body;
-    const user = await User.findById(req.user._id).select('+password +twoFactorSecret');
+    const user = await User.findById(req.user.id, true);
 
-    if (!user.twoFactorEnabled) {
+    if (!user.two_factor_enabled) {
       return res.status(400).json({
         success: false,
         message: '2FA is not enabled'
@@ -483,9 +486,9 @@ router.post('/disable-2fa', protect, requireEmailVerification, [
     }
 
     // Disable 2FA
-    user.twoFactorEnabled = false;
-    user.twoFactorSecret = undefined;
-    user.twoFactorBackupCodes = [];
+    user.two_factor_enabled = false;
+    user.two_factor_secret = null;
+    user.two_factor_backup_codes = null;
     await user.save();
 
     res.json({
@@ -529,9 +532,9 @@ router.post('/generate-backup-codes', protect, requireEmailVerification, [
     }
 
     const { password, token, backupCode } = req.body;
-    const user = await User.findById(req.user._id).select('+password +twoFactorSecret');
+    const user = await User.findById(req.user.id, true);
 
-    if (!user.twoFactorEnabled) {
+    if (!user.two_factor_enabled) {
       return res.status(400).json({
         success: false,
         message: '2FA is not enabled'
@@ -600,11 +603,14 @@ router.get('/verify-email/:token', async (req, res) => {
       .update(req.params.token)
       .digest('hex');
 
-    // Find user with this token
-    const user = await User.findOne({
-      emailVerificationToken: hashedToken,
-      emailVerificationExpires: { $gt: Date.now() }
-    });
+    // Find user with this token using raw query
+    const database = require('../config/database');
+    const result = await database.query(
+      'SELECT * FROM "user" WHERE email_verification_token = $1 AND email_verification_expires > $2',
+      [hashedToken, new Date()]
+    );
+    
+    const user = result.rows[0] ? new User(result.rows[0]) : null;
 
     if (!user) {
       return res.status(400).json({
@@ -614,10 +620,10 @@ router.get('/verify-email/:token', async (req, res) => {
     }
 
     // Verify email
-    user.isEmailVerified = true;
-    user.emailVerificationToken = undefined;
-    user.emailVerificationExpires = undefined;
-    await user.save({ validateBeforeSave: false });
+    await database.query(
+      'UPDATE "user" SET is_email_verified = true, email_verification_token = null, email_verification_expires = null, updated_at = now() WHERE id = $1',
+      [user.id]
+    );
 
     // Send HTML response for better user experience
     res.send(`
@@ -688,7 +694,7 @@ router.post('/forgot-password', [
     const { email } = req.body;
 
     // Find user
-    const user = await User.findOne({ email });
+    const user = await User.findByEmail(email);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -708,7 +714,7 @@ router.post('/forgot-password', [
       await sendEmail({
         email: user.email,
         subject: 'Password Reset Request - Saher Flow Solutions',
-        html: getPasswordResetEmailTemplate(user.firstName, resetUrl)
+        html: getPasswordResetEmailTemplate(user.name.split(' ')[0] || user.name, resetUrl)
       });
 
       res.json({
@@ -719,9 +725,11 @@ router.post('/forgot-password', [
       console.error('Password reset email failed:', emailError);
       
       // Clear reset token if email fails
-      user.passwordResetToken = undefined;
-      user.passwordResetExpires = undefined;
-      await user.save({ validateBeforeSave: false });
+      const database = require('../config/database');
+      await database.query(
+        'UPDATE "user" SET password_reset_token = null, password_reset_expires = null WHERE id = $1',
+        [user.id]
+      );
       
       res.status(500).json({
         success: false,
@@ -748,11 +756,14 @@ router.get('/reset-password/:token', async (req, res) => {
       .update(req.params.token)
       .digest('hex');
 
-    // Find user with this token
-    const user = await User.findOne({
-      passwordResetToken: hashedToken,
-      passwordResetExpires: { $gt: Date.now() }
-    });
+    // Find user with this token using raw query
+    const database = require('../config/database');
+    const result = await database.query(
+      'SELECT * FROM "user" WHERE password_reset_token = $1 AND password_reset_expires > $2',
+      [hashedToken, new Date()]
+    );
+    
+    const user = result.rows[0] ? new User(result.rows[0]) : null;
 
     if (!user) {
       return res.send(`
@@ -944,11 +955,14 @@ router.put('/reset-password/:token', [
       .update(req.params.token)
       .digest('hex');
 
-    // Find user with this token
-    const user = await User.findOne({
-      passwordResetToken: hashedToken,
-      passwordResetExpires: { $gt: Date.now() }
-    });
+    // Find user with this token using raw query
+    const database = require('../config/database');
+    const result = await database.query(
+      'SELECT * FROM "user" WHERE password_reset_token = $1 AND password_reset_expires > $2',
+      [hashedToken, new Date()]
+    );
+    
+    const user = result.rows[0] ? new User(result.rows[0]) : null;
 
     if (!user) {
       return res.status(400).json({
@@ -958,13 +972,16 @@ router.put('/reset-password/:token', [
     }
 
     // Set new password
-    user.password = req.body.password;
-    user.passwordResetToken = undefined;
-    user.passwordResetExpires = undefined;
-    await user.save();
+    await user.updatePassword(req.body.password);
+    
+    // Clear reset tokens
+    await database.query(
+      'UPDATE "user" SET password_reset_token = null, password_reset_expires = null WHERE id = $1',
+      [user.id]
+    );
 
     // Generate new token
-    const token = generateToken(user._id);
+    const token = generateToken(user.id);
 
     res.json({
       success: true,
@@ -972,13 +989,13 @@ router.put('/reset-password/:token', [
       data: {
         token,
         user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
+          id: user.id,
+          firstName: user.name.split(' ')[0] || user.name,
+          lastName: user.name.split(' ').slice(1).join(' ') || '',
           email: user.email,
-          company: user.company,
+          company: user.company_name || '',
           role: user.role,
-          isEmailVerified: user.isEmailVerified
+          isEmailVerified: user.is_email_verified
         }
       }
     });
@@ -1014,7 +1031,7 @@ router.post('/resend-verification', [
     const { email } = req.body;
 
     // Find user
-    const user = await User.findOne({ email });
+    const user = await User.findByEmail(email);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -1023,7 +1040,7 @@ router.post('/resend-verification', [
     }
 
     // Check if already verified
-    if (user.isEmailVerified) {
+    if (user.is_email_verified) {
       return res.status(400).json({
         success: false,
         message: 'Email is already verified'
@@ -1032,7 +1049,7 @@ router.post('/resend-verification', [
 
     // Generate new verification token
     const verificationToken = user.generateEmailVerificationToken();
-    await user.save({ validateBeforeSave: false });
+    await user.save();
 
     // Create verification URL
     const verificationUrl = `${process.env.API_URL || 'http://localhost:5000'}/api/auth/verify-email/${verificationToken}`;
@@ -1042,7 +1059,7 @@ router.post('/resend-verification', [
       await sendEmail({
         email: user.email,
         subject: 'Email Verification - Saher Flow Solutions',
-        html: getWelcomeEmailTemplate(user.firstName, verificationUrl)
+        html: getWelcomeEmailTemplate(user.name.split(' ')[0] || user.name, verificationUrl)
       });
 
       res.json({
@@ -1070,10 +1087,39 @@ router.post('/resend-verification', [
 // @access  Private
 router.get('/me', protect, async (req, res) => {
   try {
+    // Get user with company information
+    const database = require('../config/database');
+    const result = await database.query(`
+      SELECT u.*, c.name as company_name 
+      FROM "user" u 
+      LEFT JOIN company c ON u.company_id = c.id 
+      WHERE u.id = $1
+    `, [req.user.id]);
+    
+    if (!result.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    const userData = result.rows[0];
+    const user = {
+      id: userData.id,
+      firstName: userData.name.split(' ')[0] || userData.name,
+      lastName: userData.name.split(' ').slice(1).join(' ') || '',
+      email: userData.email,
+      company: userData.company_name || '',
+      role: userData.role,
+      isEmailVerified: userData.is_email_verified,
+      twoFactorEnabled: userData.two_factor_enabled,
+      isActive: userData.is_active
+    };
+
     res.json({
       success: true,
       data: {
-        user: req.user
+        user
       }
     });
   } catch (error) {

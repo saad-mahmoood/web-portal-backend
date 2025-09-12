@@ -19,22 +19,15 @@ import {
 import Modal from '../components/Modal'
 
 interface Company {
-  _id: string
+  id: string
   name: string
-  domains: string[]
-  description?: string
-  contactEmail?: string
-  isActive: boolean
-  createdAt: string
-  updatedAt: string
+  domain_name: string
+  created_at: string
 }
 
 interface CompanyForm {
   name: string
-  domains: string
-  description: string
-  contactEmail: string
-  isActive: boolean
+  domain_name: string
 }
 
 export default function Companies() {
@@ -43,7 +36,6 @@ export default function Companies() {
   const [showModal, setShowModal] = useState(false)
   const [editingCompany, setEditingCompany] = useState<Company | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [showInactive, setShowInactive] = useState(true)
 
   const { register, handleSubmit, formState: { errors }, reset, setValue } = useForm<CompanyForm>()
 
@@ -68,14 +60,10 @@ export default function Companies() {
     if (company) {
       setEditingCompany(company)
       setValue('name', company.name)
-      setValue('domains', company.domains.join(', '))
-      setValue('description', company.description || '')
-      setValue('contactEmail', company.contactEmail || '')
-      setValue('isActive', company.isActive)
+      setValue('domain_name', company.domain_name)
     } else {
       setEditingCompany(null)
       reset()
-      setValue('isActive', true)
     }
     setShowModal(true)
   }
@@ -91,14 +79,12 @@ export default function Companies() {
     try {
       const companyData = {
         name: data.name,
-        domains: data.domains.split(',').map(d => d.trim()).filter(d => d),
-        description: data.description,
-        contactEmail: data.contactEmail,
-        isActive: data.isActive
+        domain_name: data.domain_name,
+        domains: [data.domain_name] // For compatibility
       }
 
       if (editingCompany) {
-        await companiesAPI.updateCompany(editingCompany._id, companyData)
+        await companiesAPI.updateCompany(editingCompany.id, companyData)
         toast.success('Company updated successfully')
       } else {
         await companiesAPI.createCompany(companyData)
@@ -128,10 +114,6 @@ export default function Companies() {
     }
   }
 
-  const filteredCompanies = companies.filter(company => 
-    showInactive ? true : company.isActive
-  )
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -148,13 +130,6 @@ export default function Companies() {
           <p className="text-gray-600 text-lg">Manage approved companies and their domains</p>
         </div>
         <div className="flex items-center space-x-3">
-          <button
-            onClick={() => setShowInactive(!showInactive)}
-            className="btn-secondary"
-          >
-            {showInactive ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
-            {showInactive ? 'Hide Inactive' : 'Show All'}
-          </button>
           <button onClick={() => openModal()} className="btn-primary">
             <Plus className="w-4 h-4 mr-2" />
             Add Company
@@ -164,8 +139,8 @@ export default function Companies() {
 
       {/* Companies Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredCompanies.map((company) => (
-          <div key={company._id} className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 border-l-4 border-l-primary-500">
+        {companies.map((company) => (
+          <div key={company.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 border-l-4 border-l-primary-500">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-center flex-1">
                 <div className="w-12 h-12 bg-gradient-to-br from-purple-400 to-purple-500 rounded-xl flex items-center justify-center shadow-lg">
@@ -174,17 +149,10 @@ export default function Companies() {
                 <div className="ml-3 flex-1 min-w-0">
                   <h3 className="text-lg font-bold text-gray-900 mb-1 truncate">{company.name}</h3>
                   <div className="flex items-center">
-                    {company.isActive ? (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        <Check className="w-3 h-3 mr-1" />
-                        Active
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                        <X className="w-3 h-3 mr-1" />
-                        Inactive
-                      </span>
-                    )}
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                      <Check className="w-3 h-3 mr-1" />
+                      Active
+                    </span>
                   </div>
                 </div>
               </div>
@@ -197,7 +165,7 @@ export default function Companies() {
                   <Edit className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={() => deleteCompany(company._id, company.name)}
+                  onClick={() => deleteCompany(company.id, company.name)}
                   className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors"
                   title="Delete company"
                 >
@@ -206,48 +174,32 @@ export default function Companies() {
               </div>
             </div>
 
-            {company.description && (
-              <p className="text-sm text-gray-600 mb-4 line-clamp-2">{company.description}</p>
-            )}
-
             <div className="space-y-3">
               <div className="flex items-center text-sm text-gray-500">
                 <Globe className="w-4 h-4 mr-2 text-blue-500" />
-                <span className="font-medium">{company.domains.length} domain{company.domains.length !== 1 ? 's' : ''}</span>
+                <span className="font-medium">1 domain</span>
               </div>
               <div className="flex flex-wrap gap-1">
-                {company.domains.map((domain, index) => (
-                  <span
-                    key={index}
-                    className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200"
-                  >
-                    {domain}
-                  </span>
-                ))}
+                <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                  {company.domain_name}
+                </span>
               </div>
-              
-              {company.contactEmail && (
-                <div className="flex items-center text-sm text-gray-500">
-                  <Mail className="w-4 h-4 mr-2 text-green-500" />
-                  <span className="truncate">{company.contactEmail}</span>
-                </div>
-              )}
               
               <div className="flex items-center text-sm text-gray-500">
                 <Calendar className="w-4 h-4 mr-2 text-purple-500" />
-                <span>Created {new Date(company.createdAt).toLocaleDateString()}</span>
+                <span>Created {new Date(company.created_at).toLocaleDateString()}</span>
               </div>
             </div>
           </div>
         ))}
       </div>
 
-      {filteredCompanies.length === 0 && (
+      {companies.length === 0 && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-12 text-center">
           <Building2 className="mx-auto h-12 w-12 text-gray-400" />
           <h3 className="mt-2 text-sm font-medium text-gray-900">No companies found</h3>
           <p className="mt-1 text-sm text-gray-500">
-            {showInactive ? 'Get started by creating a new company.' : 'No active companies found. Try showing all companies.'}
+            Get started by creating a new company.
           </p>
           <button onClick={() => openModal()} className="mt-4 btn-primary">
             <Plus className="w-4 h-4 mr-2" />
@@ -275,62 +227,16 @@ export default function Companies() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Domains * (comma-separated)
+              Domain *
             </label>
             <input
-              {...register('domains', { required: 'At least one domain is required' })}
+              {...register('domain_name', { required: 'Domain is required' })}
               className="input-field"
-              placeholder="example.com, example.org"
+              placeholder="example.com"
             />
-            {errors.domains && (
-              <p className="mt-1 text-sm text-red-600">{errors.domains.message}</p>
+            {errors.domain_name && (
+              <p className="mt-1 text-sm text-red-600">{errors.domain_name.message}</p>
             )}
-            <p className="mt-1 text-xs text-gray-500">
-              Enter multiple domains separated by commas
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Description
-            </label>
-            <textarea
-              {...register('description')}
-              rows={3}
-              className="input-field"
-              placeholder="Company description (optional)"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Contact Email
-            </label>
-            <input
-              {...register('contactEmail', {
-                pattern: {
-                  value: /^\S+@\S+$/i,
-                  message: 'Invalid email address'
-                }
-              })}
-              type="email"
-              className="input-field"
-              placeholder="contact@company.com (optional)"
-            />
-            {errors.contactEmail && (
-              <p className="mt-1 text-sm text-red-600">{errors.contactEmail.message}</p>
-            )}
-          </div>
-
-          <div className="flex items-center">
-            <input
-              {...register('isActive')}
-              type="checkbox"
-              className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-            />
-            <label className="ml-2 block text-sm text-gray-900">
-              Company Active (allows new user registrations)
-            </label>
           </div>
 
           <div className="flex justify-end space-x-3 pt-4">

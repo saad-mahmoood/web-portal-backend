@@ -1,71 +1,119 @@
-// models/Company.js
-const mongoose = require('mongoose');
+const database = require('../config/database');
 const validator = require('validator');
 
-const companySchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Company name is required'],
-    trim: true,
-    unique: true,
-    maxlength: [100, 'Company name cannot exceed 100 characters']
-  },
-  domains: [{
-    type: String,
-    required: true,
-    lowercase: true,
-    trim: true,
-    set: v => typeof v === 'string' ? v.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '') : v,
-    validate: {
-      validator: function(domain) {
-        if (!domain) return false;
-        // domain has been lowercased/trimmed/set above, but double-sanitize just in case
-        const d = String(domain).trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
-        // isFQDN handles multi-label domains and country-code TLDs (e.g. qtm.com.qa)
-        return validator.isFQDN(d, { require_tld: true, allow_underscores: false, allow_trailing_dot: false });
-      },
-      message: props => `${props.value} is not a valid domain`
-    }
-  }],
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  description: {
-    type: String,
-    trim: true,
-    maxlength: [500, 'Description cannot exceed 500 characters']
-  },
-  contactEmail: {
-    type: String,
-    trim: true,
-    lowercase: true,
-    match: [
-      /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
-      'Please enter a valid contact email'
-    ]
+class Company {
+  constructor(data = {}) {
+    this.id = data.id;
+    this.name = data.name;
+    this.domain_name = data.domain_name;
+    this.created_at = data.created_at;
   }
-}, {
-  timestamps: true
-});
 
-companySchema.index({ domains: 1 });
-companySchema.index({ isActive: 1 });
+  static async create(companyData) {
+    const { name, domain_name } = companyData;
 
-companySchema.methods.hasDomain = function(domain) {
-  const normalizedDomain = String(domain).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-  return this.domains.some(companyDomain => 
-    normalizedDomain === companyDomain || normalizedDomain.endsWith('.' + companyDomain)
-  );
-};
+    // Validate domain
+    if (domain_name && !validator.isFQDN(domain_name, { require_tld: true, allow_underscores: false, allow_trailing_dot: false })) {
+      throw new Error('Invalid domain format');
+    }
 
-companySchema.statics.findByDomain = async function(domain) {
-  const normalizedDomain = String(domain).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const companies = await this.find({ 
-    isActive: true,
-    domains: { $exists: true, $ne: [] }
-  });
-  return companies.find(company => company.hasDomain(normalizedDomain));
-};
+    const query = `
+      INSERT INTO company (name, domain_name)
+      VALUES ($1, $2)
+      RETURNING *
+    `;
+    
+    const result = await database.query(query, [name, domain_name?.toLowerCase()]);
+    return new Company(result.rows[0]);
+  }
 
-module.exports = mongoose.model('Company', companySchema);
+  static async findById(id) {
+    const query = 'SELECT * FROM company WHERE id = $1';
+    const result = await database.query(query, [id]);
+    return result.rows[0] ? new Company(result.rows[0]) : null;
+  }
+
+  static async findByDomain(domain) {
+    const normalizedDomain = domain.toLowerCase();
+    const query = 'SELECT * FROM company WHERE domain_name = $1';
+    const result = await database.query(query, [normalizedDomain]);
+    return result.rows[0] ? new Company(result.rows[0]) : null;
+  }
+
+  static async findAll() {
+    const query = 'SELECT * FROM company ORDER BY name ASC';
+    const result = await database.query(query);
+    return result.rows.map(row => new Company(row));
+  }
+
+  static async update(id, updateData) {
+    const { name, domain_name } = updateData;
+    
+    // Validate domain if provided
+    if (domain_name && !validator.isFQDN(domain_name, { require_tld: true, allow_underscores: false, allow_trailing_dot: false })) {
+      throw new Error('Invalid domain format');
+    }
+
+    const query = `
+      UPDATE company 
+      SET name = COALESCE($2, name),
+          domain_name = COALESCE($3, domain_name)
+      WHERE id = $1
+      RETURNING *
+    `;
+    
+    const result = await database.query(query, [id, name, domain_name?.toLowerCase()]);
+    return result.rows[0] ? new Company(result.rows[0]) : null;
+  }
+
+  static async delete(id) {
+    const query = 'DELETE FROM company WHERE id = $1 RETURNING *';
+    const result = await database.query(query, [id]);
+    return result.rows[0] ? new Company(result.rows[0]) : null;
+  }
+
+  static async checkDomainExists(domain, excludeId = null) {
+    const normalizedDomain = domain.toLowerCase();
+    let query = 'SELECT id FROM company WHERE domain_name = $1';
+    const params = [normalizedDomain];
+    
+    if (excludeId) {
+      query += ' AND id != $2';
+      params.push(excludeId);
+    }
+    
+    const result = await database.query(query, params);
+    return result.rows.length > 0;
+  }
+
+  static async checkNameExists(name, excludeId = null) {
+    let query = 'SELECT id FROM company WHERE LOWER(name) = LOWER($1)';
+    const params = [name];
+    
+    if (excludeId) {
+      query += ' AND id != $2';
+      params.push(excludeId);
+    }
+    
+    const result = await database.query(query, params);
+    return result.rows.length > 0;
+  }
+
+  hasDomain(domain) {
+    const normalizedDomain = domain.toLowerCase();
+    return this.domain_name === normalizedDomain || normalizedDomain.endsWith('.' + this.domain_name);
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      name: this.name,
+      domains: this.domain_name ? [this.domain_name] : [], // For compatibility with frontend
+      domain_name: this.domain_name,
+      created_at: this.created_at,
+      isActive: true // For compatibility with frontend
+    };
+  }
+}
+
+module.exports = Company;

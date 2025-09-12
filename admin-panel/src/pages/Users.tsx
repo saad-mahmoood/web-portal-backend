@@ -77,13 +77,14 @@ export default function Users() {
 
   const openEditModal = (user: User) => {
     setEditingUser(user)
-    setValue('firstName', user.firstName)
-    setValue('lastName', user.lastName)
+    const nameParts = user.name.split(' ')
+    setValue('firstName', nameParts[0] || '')
+    setValue('lastName', nameParts.slice(1).join(' ') || '')
     setValue('email', user.email)
-    setValue('company', user.company)
+    setValue('company', user.company_name || user.company)
     setValue('role', user.role)
-    setValue('isEmailVerified', user.isEmailVerified)
-    setValue('isActive', user.isActive)
+    setValue('isEmailVerified', user.is_email_verified)
+    setValue('isActive', user.is_active)
     setShowModal(true)
   }
 
@@ -99,10 +100,9 @@ export default function Users() {
     setSubmitting(true)
     try {
       // Update user profile
-      await usersAPI.updateUser(editingUser._id, {
+      await usersAPI.updateUser(editingUser.id, {
         firstName: data.firstName,
         lastName: data.lastName,
-        company: data.company,
         role: data.role,
         isEmailVerified: data.isEmailVerified,
         isActive: data.isActive
@@ -134,18 +134,17 @@ export default function Users() {
 
   const filteredUsers = users.filter(user => {
     const matchesSearch = 
-      user.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.company.toLowerCase().includes(searchTerm.toLowerCase())
+      (user.company_name || user.company || '').toLowerCase().includes(searchTerm.toLowerCase())
     
     const matchesRole = filterRole === 'all' || user.role === filterRole
     const matchesVerified = filterVerified === 'all' || 
-      (filterVerified === 'verified' && user.isEmailVerified) ||
-      (filterVerified === 'unverified' && !user.isEmailVerified)
+      (filterVerified === 'verified' && user.is_email_verified) ||
+      (filterVerified === 'unverified' && !user.is_email_verified)
     const matchesActive = filterActive === 'all' ||
-      (filterActive === 'active' && user.isActive) ||
-      (filterActive === 'inactive' && !user.isActive)
+      (filterActive === 'active' && user.is_active) ||
+      (filterActive === 'inactive' && !user.is_active)
     
     return matchesSearch && matchesRole && matchesVerified && matchesActive
   })
@@ -154,14 +153,14 @@ export default function Users() {
     const csvContent = [
       ['Name', 'Email', 'Company', 'Role', 'Verified', 'Active', 'Last Login', 'Created'],
       ...filteredUsers.map(user => [
-        `${user.firstName} ${user.lastName}`,
+        user.name,
         user.email,
-        user.company,
+        user.company_name || user.company,
         user.role,
-        user.isEmailVerified ? 'Yes' : 'No',
-        user.isActive ? 'Yes' : 'No',
-        user.lastLogin ? new Date(user.lastLogin).toLocaleDateString() : 'Never',
-        new Date(user.createdAt).toLocaleDateString()
+        user.is_email_verified ? 'Yes' : 'No',
+        user.is_active ? 'Yes' : 'No',
+        user.last_login_time ? new Date(user.last_login_time).toLocaleDateString() : 'Never',
+        user.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'
       ])
     ].map(row => row.join(',')).join('\n')
 
@@ -279,19 +278,19 @@ export default function Users() {
                     <div className="flex items-center">
                       <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-blue-500 rounded-xl flex items-center justify-center shadow-sm">
                         <span className="text-white font-semibold text-sm">
-                          {user.firstName[0]}{user.lastName[0]}
+                          {user.name.split(' ').map((n: string) => n[0]).join('').substring(0, 2)}
                         </span>
                       </div>
                       <div className="ml-4">
                         <div className="text-sm font-semibold text-gray-900">
-                          {user.firstName} {user.lastName}
+                          {user.name}
                         </div>
                         <div className="text-sm text-gray-500">{user.email}</div>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {user.company}
+                    {user.company_name || user.company}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
@@ -305,7 +304,7 @@ export default function Users() {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center space-x-2">
-                      {user.isEmailVerified ? (
+                      {user.is_email_verified ? (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           <UserCheck className="w-3 h-3 mr-1" />
                           Verified
@@ -316,7 +315,7 @@ export default function Users() {
                           Pending
                         </span>
                       )}
-                      {!user.isActive && (
+                      {!user.is_active && (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
                           Inactive
                         </span>
@@ -324,10 +323,10 @@ export default function Users() {
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {user.lastLogin ? (
+                    {user.last_login_time ? (
                       <div className="flex items-center">
                         <Calendar className="w-4 h-4 mr-1" />
-                        {new Date(user.lastLogin).toLocaleDateString()}
+                        {new Date(user.last_login_time).toLocaleDateString()}
                       </div>
                     ) : (
                       'Never'
@@ -343,7 +342,7 @@ export default function Users() {
                         <Edit className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => deleteUser(user._id, `${user.firstName} ${user.lastName}`)}
+                        onClick={() => deleteUser(user.id, user.name)}
                         className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition-colors"
                         title="Delete user"
                       >
